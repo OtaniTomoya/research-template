@@ -1,14 +1,14 @@
 [project]
-name = "poi-recommendation-research"
+name = "research-project"
 version = "0.1.0"
-description = "POI推薦と情報推薦に関する研究プロジェクト"
+description = "研究プロジェクト"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Tomoya Otani", email = "tomoya.17843@gmail.com" }
 ]
-license = { text = "MIT" }
-keywords = ["poi-recommendation", "information-retrieval", "filter-bubble", "machine-learning"]
+license = { }
+keywords = []
 
 dependencies = [
     # 基本ライブラリ
@@ -18,20 +18,6 @@ dependencies = [
     "seaborn>=0.13.0",
     "scikit-learn>=1.3.0",
     "scipy>=1.11.0",
-    
-    # PyTorch (M1 Mac対応)
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-    
-    # 時系列解析
-    "statsmodels>=0.14.0",
-    
-    # NLP
-    "transformers>=4.30.0",
-    "tokenizers>=0.13.0",
-    
-    # 強化学習
-    "gymnasium>=0.28.0",
     
     # ユーティリティ
     "tqdm>=4.66.0",

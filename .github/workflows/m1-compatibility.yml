@@ -1,0 +1,349 @@
+# .github/workflows/m1-compatibility.yml
+name: M1 Mac互換性チェック
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'src/**/*.py'
+      - '.github/workflows/m1-compatibility.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'src/**/*.py'
+      - '.github/workflows/m1-compatibility.yml'
+  schedule:
+    # 毎週月曜日の午前9時（JST）に実行
+    - cron: '0 0 * * 1'
+
+jobs:
+  m1-compatibility:
+    name: Apple Silicon (M1/M2) チェック
+    runs-on: macos-14  # M1 Mac runner
+    timeout-minutes: 20
+    
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+    - name: システム情報の表示
+      run: |
+        echo "## 🖥️ システム情報" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **OS**: $(sw_vers -productName) $(sw_vers -productVersion)" >> $GITHUB_STEP_SUMMARY
+        echo "- **アーキテクチャ**: $(uname -m)" >> $GITHUB_STEP_SUMMARY
+        echo "- **プロセッサ**: $(sysctl -n machdep.cpu.brand_string)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # 詳細情報をログに出力
+        system_profiler SPHardwareDataType
+    
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Python ${{ matrix.python-version }} のセットアップ
+      run: |
+        uv python install ${{ matrix.python-version }}
+        echo "Python $(uv run python --version) をインストールしました"
+        
+        # Pythonがネイティブarm64で動作しているか確認
+        echo "## 🐍 Python環境" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Pythonバージョン**: $(uv run python --version)" >> $GITHUB_STEP_SUMMARY
+        echo "- **アーキテクチャ**: $(uv run python -c 'import platform; print(platform.machine())')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+    
+    - name: 依存関係のインストール
+      run: |
+        echo "依存関係をインストール中..."
+        uv sync --all-groups
+        
+        # インストールされたパッケージの確認
+        echo "### 主要パッケージのバージョン" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| パッケージ | バージョン |" >> $GITHUB_STEP_SUMMARY
+        echo "|------------|------------|" >> $GITHUB_STEP_SUMMARY
+    
+    - name: PyTorchの互換性チェック
+      run: |
+        echo "## 🔥 PyTorch互換性チェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # PyTorchのインポートとバージョン確認
+        uv run python -c "
+import torch
+import sys
+
+print(f'PyTorch version: {torch.__version__}')
+print(f'MPS available: {torch.backends.mps.is_available()}')
+print(f'MPS built: {torch.backends.mps.is_built()}')
+
+# GitHub Summaryに出力
+with open(sys.argv[1], 'a') as f:
+    f.write(f'| PyTorch | {torch.__version__} |\\n')
+    f.write(f'| MPS対応 | {\"✅\" if torch.backends.mps.is_available() else \"❌\"} |\\n')
+" "$GITHUB_STEP_SUMMARY"
+        
+        # MPSデバイスでの基本的な操作テスト
+        uv run python -c "
+import torch
+
+if torch.backends.mps.is_available():
+    print('MPSデバイステスト...')
+    device = torch.device('mps')
+    
+    # テンソル作成
+    x = torch.randn(100, 100, device=device)
+    y = torch.randn(100, 100, device=device)
+    
+    # 行列積
+    z = torch.matmul(x, y)
+    print(f'行列積の結果サイズ: {z.shape}')
+    
+    # 勾配計算
+    x.requires_grad = True
+    z = (x ** 2).sum()
+    z.backward()
+    print(f'勾配計算成功: {x.grad is not None}')
+    
+    print('✅ MPSデバイステスト成功')
+else:
+    print('⚠️ MPSが利用できません')
+"
+    
+    - name: NumPy/SciPyの互換性チェック
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔢 数値計算ライブラリチェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        uv run python -c "
+import numpy as np
+import scipy
+import sys
+
+print(f'NumPy version: {np.__version__}')
+print(f'SciPy version: {scipy.__version__}')
+
+# Accelerateフレームワークの使用確認
+config = np.show_config(mode='dicts')
+if 'accelerate' in str(config).lower():
+    print('✅ Accelerateフレームワークを使用')
+else:
+    print('ℹ️ Accelerateフレームワークを使用していない可能性')
+
+# GitHub Summaryに出力
+with open(sys.argv[1], 'a') as f:
+    f.write(f'| NumPy | {np.__version__} |\\n')
+    f.write(f'| SciPy | {scipy.__version__} |\\n')
+
+# ベンチマークテスト
+import time
+size = 1000
+A = np.random.rand(size, size)
+B = np.random.rand(size, size)
+
+start = time.time()
+C = np.dot(A, B)
+elapsed = time.time() - start
+
+print(f'行列積 ({size}x{size}) 実行時間: {elapsed:.3f}秒')
+" "$GITHUB_STEP_SUMMARY"
+    
+    - name: 機械学習ライブラリのチェック
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🤖 機械学習ライブラリチェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # scikit-learn
+        uv run python -c "
+import sklearn
+import sys
+
+print(f'scikit-learn version: {sklearn.__version__}')
+
+# OpenBLASの確認
+from sklearn._build_utils import get_blas_info
+blas_info = get_blas_info()
+print(f'BLAS情報: {blas_info}')
+
+with open(sys.argv[1], 'a') as f:
+    f.write(f'| scikit-learn | {sklearn.__version__} |\\n')
+" "$GITHUB_STEP_SUMMARY"
+        
+        # transformers
+        uv run python -c "
+try:
+    import transformers
+    print(f'transformers version: {transformers.__version__}')
+    
+    # 基本的なモデルロードテスト
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+    print('✅ Transformersの基本機能確認')
+    
+    import sys
+    with open(sys.argv[1], 'a') as f:
+        f.write(f'| transformers | {transformers.__version__} |\\n')
+except Exception as e:
+    print(f'⚠️ Transformersのテスト失敗: {e}')
+" "$GITHUB_STEP_SUMMARY"
+    
+    - name: パフォーマンステスト
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## ⚡ パフォーマンステスト" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # 簡単なベンチマークスクリプト
+        cat > benchmark.py << 'EOF'
+import time
+import torch
+import numpy as np
+import sys
+
+results = []
+
+# NumPyテスト
+size = 2000
+A = np.random.rand(size, size)
+B = np.random.rand(size, size)
+
+start = time.time()
+C = np.dot(A, B)
+numpy_time = time.time() - start
+results.append(f"NumPy行列積 ({size}x{size}): {numpy_time:.3f}秒")
+
+# PyTorchテスト（CPU）
+A_torch = torch.randn(size, size)
+B_torch = torch.randn(size, size)
+
+start = time.time()
+C_torch = torch.matmul(A_torch, B_torch)
+torch_cpu_time = time.time() - start
+results.append(f"PyTorch CPU行列積: {torch_cpu_time:.3f}秒")
+
+# PyTorchテスト（MPS）
+if torch.backends.mps.is_available():
+    A_mps = A_torch.to('mps')
+    B_mps = B_torch.to('mps')
+    
+    # ウォームアップ
+    torch.matmul(A_mps, B_mps)
+    torch.mps.synchronize()
+    
+    start = time.time()
+    C_mps = torch.matmul(A_mps, B_mps)
+    torch.mps.synchronize()
+    torch_mps_time = time.time() - start
+    results.append(f"PyTorch MPS行列積: {torch_mps_time:.3f}秒")
+    results.append(f"MPS高速化: {torch_cpu_time/torch_mps_time:.2f}x")
+
+# 結果をGitHub Summaryに出力
+with open(sys.argv[1], 'a') as f:
+    for result in results:
+        f.write(f"- {result}\\n")
+EOF
+        
+        uv run python benchmark.py "$GITHUB_STEP_SUMMARY"
+    
+    - name: プロジェクトコードのインポートテスト
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📦 プロジェクトインポートテスト" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # プロジェクトのモジュールをインポート
+        uv run python -c "
+import sys
+sys.path.insert(0, 'src')
+
+try:
+    # プロジェクトモジュールのインポート
+    from ${PROJECT_NAME:-poi_recommendation_research}.utils.common import get_device
+    device = get_device()
+    print(f'検出されたデバイス: {device}')
+    
+    with open(sys.argv[1], 'a') as f:
+        f.write(f'✅ プロジェクトモジュールのインポート成功\\n')
+        f.write(f'- 検出されたデバイス: {device}\\n')
+except Exception as e:
+    print(f'❌ インポートエラー: {e}')
+    with open(sys.argv[1], 'a') as f:
+        f.write(f'❌ プロジェクトモジュールのインポート失敗: {e}\\n')
+    sys.exit(1)
+" "$GITHUB_STEP_SUMMARY"
+    
+    - name: ユニットテスト実行
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🧪 ユニットテスト" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # テストを実行
+        if uv run pytest tests/ -v --no-header --tb=short; then
+          echo "✅ すべてのテストがパスしました" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ テストが失敗しました" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+    
+    - name: メモリ使用量チェック
+      if: always()
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 💾 リソース使用状況" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # メモリ使用状況
+        vm_stat | grep -E "(free|active|inactive|wired|compressed)" | while read line; do
+          echo "- $line" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        # ディスク使用状況
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ディスク使用状況" >> $GITHUB_STEP_SUMMARY
+        df -h | grep -E "(Filesystem|/System/Volumes/Data)" >> $GITHUB_STEP_SUMMARY
+
+  m1-notebook-test:
+    name: M1 Notebook実行テスト
+    runs-on: macos-14
+    timeout-minutes: 15
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[m1-notebook]')
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+    
+    - name: Python環境のセットアップ
+      run: |
+        uv python install 3.11
+        uv sync --group notebook
+    
+    - name: Notebookの実行テスト
+      run: |
+        echo "## 📓 Notebook実行テスト (M1)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # 環境確認用のNotebookがあれば実行
+        if [ -f "notebooks/01_exploratory/00_setup_check.ipynb" ]; then
+          uv run jupyter execute notebooks/01_exploratory/00_setup_check.ipynb
+          echo "✅ セットアップ確認Notebookの実行成功" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "ℹ️ セットアップ確認Notebookが見つかりません" >> $GITHUB_STEP_SUMMARY
+        fi

@@ -1,0 +1,259 @@
+# .github/workflows/lint.yml
+name: コード品質チェック
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+# 並行実行の制御
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-format:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # すべての履歴を取得（差分チェック用）
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Python環境のセットアップ
+      run: |
+        uv python install 3.11
+        echo "Python $(uv run python --version) を使用"
+    
+    - name: 開発依存関係のインストール
+      run: |
+        uv sync --group dev
+        
+    - name: Ruffによるリントチェック
+      id: ruff-lint
+      run: |
+        echo "::group::Ruffリント結果"
+        uv run ruff check src/ tests/ scripts/ --output-format=github
+        echo "::endgroup::"
+      continue-on-error: true
+    
+    - name: Ruffによるフォーマットチェック
+      id: ruff-format
+      run: |
+        echo "::group::Ruffフォーマット結果"
+        uv run ruff format --check src/ tests/ scripts/
+        echo "::endgroup::"
+      continue-on-error: true
+    
+    - name: Pyrightによる型チェック
+      id: pyright
+      run: |
+        echo "::group::Pyright型チェック結果"
+        uv run pyright src/
+        echo "::endgroup::"
+      continue-on-error: true
+    
+    - name: 結果サマリー
+      if: always()
+      run: |
+        echo "## 🔍 コード品質チェック結果" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Ruffリント
+        if [ "${{ steps.ruff-lint.outcome }}" == "success" ]; then
+          echo "✅ **Ruffリント**: パス" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Ruffリント**: エラーあり" >> $GITHUB_STEP_SUMMARY
+          echo "  \`uv run ruff check --fix\` で自動修正可能" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Ruffフォーマット
+        if [ "${{ steps.ruff-format.outcome }}" == "success" ]; then
+          echo "✅ **Ruffフォーマット**: パス" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Ruffフォーマット**: 要修正" >> $GITHUB_STEP_SUMMARY
+          echo "  \`uv run ruff format\` で自動修正可能" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Pyright
+        if [ "${{ steps.pyright.outcome }}" == "success" ]; then
+          echo "✅ **Pyright型チェック**: パス" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️  **Pyright型チェック**: 型エラーあり" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # 全体の結果
+        if [ "${{ steps.ruff-lint.outcome }}" != "success" ] || \
+           [ "${{ steps.ruff-format.outcome }}" != "success" ] || \
+           [ "${{ steps.pyright.outcome }}" != "success" ]; then
+          exit 1
+        fi
+
+  code-security:
+    name: セキュリティチェック
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+    
+    - name: Python環境のセットアップ
+      run: uv python install 3.11
+    
+    - name: Banditによるセキュリティチェック
+      run: |
+        uv tool run bandit -r src/ -f json -o bandit-report.json || true
+        
+    - name: セキュリティレポートの解析
+      if: always()
+      run: |
+        if [ -f bandit-report.json ]; then
+          echo "## 🔒 セキュリティチェック結果" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # JSONから問題の数を抽出
+          HIGH=$(jq '.metrics."SEVERITY.HIGH"' bandit-report.json)
+          MEDIUM=$(jq '.metrics."SEVERITY.MEDIUM"' bandit-report.json)
+          LOW=$(jq '.metrics."SEVERITY.LOW"' bandit-report.json)
+          
+          if [ "$HIGH" -eq 0 ] && [ "$MEDIUM" -eq 0 ]; then
+            echo "✅ セキュリティ問題は検出されませんでした" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ セキュリティ問題が検出されました:" >> $GITHUB_STEP_SUMMARY
+            echo "- 高: $HIGH" >> $GITHUB_STEP_SUMMARY
+            echo "- 中: $MEDIUM" >> $GITHUB_STEP_SUMMARY
+            echo "- 低: $LOW" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+
+  notebook-check:
+    name: Notebookチェック
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: contains(github.event.head_commit.message, '.ipynb') || github.event.pull_request.changed_files > 0
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+    
+    - name: Python環境のセットアップ
+      run: |
+        uv python install 3.11
+        uv sync --group notebook
+    
+    - name: Notebookの出力チェック
+      run: |
+        echo "## 📓 Notebookチェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # .ipynbファイルを検索
+        notebooks=$(find notebooks -name "*.ipynb" -type f)
+        
+        if [ -z "$notebooks" ]; then
+          echo "Notebookファイルが見つかりませんでした" >> $GITHUB_STEP_SUMMARY
+          exit 0
+        fi
+        
+        # 各Notebookをチェック
+        has_output=false
+        for nb in $notebooks; do
+          # nbstripoutで出力があるかチェック
+          if ! uv run nbstripout --dry-run "$nb" > /dev/null 2>&1; then
+            echo "⚠️ \`$nb\` に出力が含まれています" >> $GITHUB_STEP_SUMMARY
+            has_output=true
+          fi
+        done
+        
+        if [ "$has_output" = false ]; then
+          echo "✅ すべてのNotebookに出力が含まれていません" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**修正方法**: \`uv run nbstripout notebooks/**/*.ipynb\`" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+
+  dependencies-check:
+    name: 依存関係チェック
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: uvのインストール
+      uses: astral-sh/setup-uv@v4
+    
+    - name: 依存関係の整合性チェック
+      run: |
+        echo "## 📦 依存関係チェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # uv.lockファイルの存在確認
+        if [ ! -f "uv.lock" ]; then
+          echo "❌ uv.lockファイルが見つかりません" >> $GITHUB_STEP_SUMMARY
+          echo "  \`uv lock\` を実行してください" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+        
+        # 依存関係の同期チェック
+        if uv sync --dry-run 2>&1 | grep -q "Would install"; then
+          echo "⚠️ 依存関係が同期されていません" >> $GITHUB_STEP_SUMMARY
+          echo "  \`uv sync\` を実行してください" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        else
+          echo "✅ 依存関係は最新です" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # 脆弱性チェック（pip-audit使用）
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 脆弱性チェック" >> $GITHUB_STEP_SUMMARY
+        uv tool run pip-audit || echo "⚠️ 脆弱性チェックに失敗しました" >> $GITHUB_STEP_SUMMARY
+
+  documentation-check:
+    name: ドキュメントチェック
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+    
+    - name: Markdownリンクチェック
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        config-file: '.github/markdown-link-check.json'
+        folder-path: 'docs'
+        file-path: './README.md'
+      continue-on-error: true
+    
+    - name: Docstringカバレッジチェック
+      run: |
+        echo "## 📚 ドキュメントチェック" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # interrogateがインストールされているか確認
+        if command -v interrogate &> /dev/null; then
+          interrogate -vv src/ --generate-badge docs/
+          echo "Docstringカバレッジバッジを生成しました" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "ℹ️ interrogateがインストールされていません" >> $GITHUB_STEP_SUMMARY
+        fi
