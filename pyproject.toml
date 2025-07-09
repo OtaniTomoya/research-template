@@ -7,8 +7,6 @@ requires-python = ">=3.11"
 authors = [
     { name = "Tomoya Otani", email = "tomoya.17843@gmail.com" }
 ]
-license = { }
-keywords = []
 
 dependencies = [
     # 基本ライブラリ
