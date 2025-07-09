@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# uv
+uv.lock
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 研究データ
+data/*
+*.csv
+*.json
+*.parquet
+*.h5
+*.hdf5
+
+# モデル・結果
+results/*
+
+# テスト
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ドキュメント
+
+# 動画ファイル
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# 一時ファイル
+*.tmp
+*.temp
+.cache/

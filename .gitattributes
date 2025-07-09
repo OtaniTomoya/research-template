@@ -1,0 +1,22 @@
+# 改行コードの自動変換を設定
+* text=auto
+
+# Python files
+*.py text
+*.pyx text
+*.pxd text
+
+# Notebooks
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb
+
+# Data files
+*.csv filter=lfs diff=lfs merge=lfs -text
+*.parquet filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+*.hdf5 filter=lfs diff=lfs merge=lfs -text
+
+# Model files
+*.pth filter=lfs diff=lfs merge=lfs -text
+*.pkl filter=lfs diff=lfs merge=lfs -text
+*.ckpt filter=lfs diff=lfs merge=lfs -text
